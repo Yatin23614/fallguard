@@ -1,0 +1,16 @@
+# Datasets and training outputs (SisFall is ~240 MB: see README to download)
+data/
+models/
+
+# PlatformIO / editor
+.pio/
+.vscode/
+firmware/.pio/
+firmware_stm32/.pio/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local logs
+*.log

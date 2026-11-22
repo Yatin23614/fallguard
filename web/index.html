@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FallGuard Monitor</title>
+<meta name="description" content="Live dashboard for the FallGuard fall-detection wearable (ESP32 + MPU-6050) over Web Bluetooth.">
+<style>
+  :root {
+    --bg: #f4f5f7; --surface: #ffffff; --surface-2: #eef0f3; --text: #16191d;
+    --muted: #5f6873; --border: #dde1e6; --accent: #2563eb; --accent-soft: #dbe7ff;
+    --ok: #15803d; --ok-soft: #dcfce7; --warn: #b45309; --warn-soft: #fef3c7;
+    --danger: #b91c1c; --danger-soft: #fee2e2; --grid: #e6e9ed; --on-accent: #ffffff;
+    --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1216; --surface: #171b21; --surface-2: #1f242c; --text: #e8ebef;
+      --muted: #9aa4b1; --border: #2a313a; --accent: #6ea0ff; --accent-soft: #1c2b4a;
+      --ok: #4ade80; --ok-soft: #12301f; --warn: #fbbf24; --warn-soft: #3a2c0d;
+      --danger: #f87171; --danger-soft: #3d1515; --grid: #232a33; --on-accent: #0b1220;
+      --shadow: none; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1216; --surface: #171b21; --surface-2: #1f242c; --text: #e8ebef;
+    --muted: #9aa4b1; --border: #2a313a; --accent: #6ea0ff; --accent-soft: #1c2b4a;
+    --ok: #4ade80; --ok-soft: #12301f; --warn: #fbbf24; --warn-soft: #3a2c0d;
+    --danger: #f87171; --danger-soft: #3d1515; --grid: #232a33; --on-accent: #0b1220;
+    --shadow: none; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+    border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--surface-2); color: var(--muted); }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.danger { background: var(--danger-soft); color: var(--danger); }
+  button { font: inherit; font-weight: 600; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .banner { display: none; border-radius: 12px; padding: 16px 18px; margin-bottom: 16px;
+    border: 1px solid transparent; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .banner.show { display: flex; }
+  .banner.alert { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+  .banner.pre { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+  .banner .big { font-size: 22px; font-weight: 800; letter-spacing: -.01em; }
+  .banner .detail { color: var(--text); font-size: 14px; }
+  .banner .grow { flex: 1; min-width: 220px; }
+  .banner button { border-color: currentColor; }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  html, body { overflow-x: hidden; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; box-shadow: var(--shadow); min-width: 0; }
+  .card.wide { grid-column: 1 / -1; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    margin: 0 0 12px; font-weight: 700; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 14px; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 14px; }
+  @media (max-width: 420px) { .stages { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .stage { padding: 8px 4px; border-radius: 8px; background: var(--surface-2); display: flex;
+    align-items: center; justify-content: center;
+    font-size: 12px; color: var(--muted); text-align: center; font-weight: 600; }
+  .stage.on { background: var(--accent-soft); color: var(--accent); }
+
+  canvas { width: 100%; height: 220px; display: block; }
+  .readout { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 13px;
+    color: var(--muted); font-variant-numeric: tabular-nums; }
+  .readout b { color: var(--text); }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-bottom: 6px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+
+  .bars { display: grid; gap: 8px; }
+  .bar { display: grid; grid-template-columns: 56px 1fr 52px; align-items: center; gap: 10px; font-size: 14px; }
+  .bar .track { height: 12px; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
+  .bar .fill { height: 100%; width: 0; background: var(--accent); border-radius: 6px; transition: width .3s; }
+  .bar.fall .fill { background: var(--danger); }
+  .bar .pct { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .verdict { margin-top: 12px; font-size: 14px; color: var(--muted); }
+  .verdict b { color: var(--text); }
+
+  .log { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow: auto; font-size: 14px; }
+  .log li { display: grid; grid-template-columns: max-content 1fr; gap: 12px; padding: 7px 0;
+    border-bottom: 1px solid var(--border); }
+  .log li:last-child { border-bottom: 0; }
+  .log time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .log .t-alert { color: var(--danger); font-weight: 700; }
+  .log .t-warn { color: var(--warn); font-weight: 600; }
+  .log .t-ok { color: var(--ok); font-weight: 600; }
+  .empty { color: var(--muted); font-size: 14px; }
+  .note { margin-top: 18px; color: var(--muted); font-size: 13px; }
+  .note code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  @media (max-width: 520px) { .banner .big { font-size: 19px; } canvas { height: 180px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>FallGuard Monitor</h1>
+      <div class="sub">Waist-worn fall detector · ESP32 + MPU-6050 · on-device 1D-CNN</div>
+    </div>
+    <div class="spacer"></div>
+    <span id="conn" class="pill">Not connected</span>
+    <button id="btnDemo" type="button">Demo mode</button>
+    <button id="btnConnect" class="primary" type="button">Connect device</button>
+  </header>
+
+  <section id="banner" class="banner" role="alert" aria-live="assertive">
+    <div class="grow">
+      <div id="bannerTitle" class="big"></div>
+      <div id="bannerDetail" class="detail"></div>
+    </div>
+    <button id="btnAck" type="button">Acknowledge</button>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Device</h2>
+      <dl class="kv">
+        <dt>Alert state</dt><dd id="vState">–</dd>
+        <dt>Uptime</dt><dd id="vUptime">–</dd>
+        <dt>Battery</dt><dd id="vBatt">–</dd>
+        <dt>Last update</dt><dd id="vSeen">–</dd>
+      </dl>
+      <div class="stages" aria-label="Detector pipeline stage">
+        <div class="stage" data-stage="0">Monitoring</div>
+        <div class="stage" data-stage="1">Impact → CNN</div>
+        <div class="stage" data-stage="2">Post-impact check</div>
+        <div class="stage" data-stage="3">Cooldown</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Last impact: CNN decision</h2>
+      <div id="bars" class="bars"></div>
+      <div id="verdict" class="verdict">No impact detected yet.</div>
+    </section>
+
+    <section class="card wide">
+      <h2>Live motion (last 10 s)</h2>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>|acceleration| (g)</span>
+        <span><i style="background:var(--danger)"></i>impact 2.5 g / 3 g</span>
+        <span><i style="background:var(--warn)"></i>free-fall 0.6 g</span>
+      </div>
+      <canvas id="chart" role="img" aria-label="Acceleration magnitude over the last ten seconds"></canvas>
+      <div class="readout">
+        <span>ax <b id="rAx">–</b></span><span>ay <b id="rAy">–</b></span><span>az <b id="rAz">–</b></span>
+        <span>|a| <b id="rA">–</b></span><span>|gyro| <b id="rG">–</b></span><span>tilt <b id="rTilt">–</b></span>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <h2>Event log</h2>
+      <ul id="log" class="log"><li class="empty">Connect the device or start demo mode.</li></ul>
+    </section>
+  </div>
+
+  <p class="note">
+    Needs Chrome or Edge (Web Bluetooth) on desktop or Android, served from <code>localhost</code> or HTTPS:
+    run <code>python -m http.server 8000</code> in the <code>web</code> folder and open
+    <code>http://localhost:8000</code>. Demo mode works anywhere without a device.
+  </p>
+</div>
+
+<script>
+"use strict";
+const UUID = {
+  service: "6e3f0001-8b1a-4c2d-9a7e-1f2b3c4d5e6f",
+  alert:   "6e3f0002-8b1a-4c2d-9a7e-1f2b3c4d5e6f",
+  status:  "6e3f0003-8b1a-4c2d-9a7e-1f2b3c4d5e6f",
+  ack:     "6e3f0004-8b1a-4c2d-9a7e-1f2b3c4d5e6f",
+  motion:  "6e3f0005-8b1a-4c2d-9a7e-1f2b3c4d5e6f",
+};
+const CLASSES = ["fall", "sit", "lie", "other"];
+const PRE_ALERT_S = 15;
+const STATE_LABEL = { idle: "Monitoring", pre_alert: "Possible fall: countdown", alerted: "ALERT active" };
+const $ = (id) => document.getElementById(id);
+
+// ------------------------------------------------------------------ state
+const motion = [];             // {t, a}
+let device = null, ackChar = null, demo = null;
+let preAlertTimer = null, lastAlertId = null, wantConnected = false;
+
+// ------------------------------------------------------------------ UI helpers
+function setConn(text, cls) { const el = $("conn"); el.textContent = text; el.className = "pill " + (cls || ""); }
+function fmtUptime(s) {
+  if (s == null || s < 0) return "–";
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = s % 60;
+  return (h ? h + "h " : "") + (h || m ? m + "m " : "") + ss + "s";
+}
+function clock() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
+function log(text, kind) {
+  const ul = $("log");
+  if (ul.firstElementChild && ul.firstElementChild.classList.contains("empty")) ul.textContent = "";
+  const li = document.createElement("li");
+  const t = document.createElement("time"); t.textContent = clock();
+  const s = document.createElement("span"); s.textContent = text; if (kind) s.className = "t-" + kind;
+  li.append(t, s); ul.prepend(li);
+  while (ul.children.length > 200) ul.lastElementChild.remove();
+}
+function seen() { $("vSeen").textContent = clock(); }
+
+function buildBars() {
+  const box = $("bars"); box.textContent = "";
+  for (const c of CLASSES) {
+    const row = document.createElement("div"); row.className = "bar " + c;
+    const name = document.createElement("span"); name.textContent = c;
+    const track = document.createElement("div"); track.className = "track";
+    const fill = document.createElement("div"); fill.className = "fill"; fill.id = "fill-" + c; track.append(fill);
+    const pct = document.createElement("span"); pct.className = "pct"; pct.id = "pct-" + c; pct.textContent = "–";
+    row.append(name, track, pct); box.append(row);
+  }
+}
+
+function showBanner(kind, title, detail, ackable) {
+  const b = $("banner"); b.className = "banner show " + kind;
+  $("bannerTitle").textContent = title; $("bannerDetail").textContent = detail;
+  $("btnAck").style.display = ackable ? "" : "none";
+}
+function hideBanner() { $("banner").className = "banner"; clearInterval(preAlertTimer); preAlertTimer = null; }
+
+// ------------------------------------------------------------------ message handlers
+// (shared by the BLE connection and demo mode)
+function handleStatus(msg) {
+  seen();
+  if (msg.event === "impact") {
+    const p = (msg.probs || []).map((v) => Math.max(0, Math.min(1, Number(v) || 0)));
+    CLASSES.forEach((c, i) => {
+      const v = p[i] || 0;
+      $("fill-" + c).style.width = (v * 100).toFixed(0) + "%";
+      $("pct-" + c).textContent = (v * 100).toFixed(0) + "%";
+    });
+    const top = p.length ? CLASSES[p.indexOf(Math.max(...p))] : "?";
+    const v = $("verdict"); v.textContent = "";
+    const b = document.createElement("b"); b.textContent = top;
+    v.append("Classified as ", b, msg.fall_like ? ", so it's checking whether the wearer stays down." : ", so it was ignored (not a fall).");
+    log(`Impact detected: CNN says ${top} (fall ${(100 * (p[0] || 0)).toFixed(0)}%)`, msg.fall_like ? "warn" : null);
+    return;
+  }
+  if (msg.state) {
+    $("vState").textContent = STATE_LABEL[msg.state] || String(msg.state);
+    if (msg.state === "pre_alert") startPreAlert();
+    if (msg.state === "idle" && !$("banner").classList.contains("alert")) hideBanner();
+  }
+  if (msg.uptime_s != null) $("vUptime").textContent = fmtUptime(Number(msg.uptime_s));
+  if (msg.batt_mv != null) $("vBatt").textContent = msg.batt_mv < 0 ? "not measured" : (msg.batt_mv / 1000).toFixed(2) + " V";
+}
+
+function startPreAlert() {
+  if (preAlertTimer) return;
+  let left = PRE_ALERT_S;
+  const tick = () => {
+    showBanner("pre", "Possible fall detected",
+      `Alarm in ${Math.max(left, 0)} s unless the wearer presses the button on the device.`, false);
+    if (left-- <= 0) { clearInterval(preAlertTimer); preAlertTimer = null; }
+  };
+  tick(); preAlertTimer = setInterval(tick, 1000);
+  log("Fall confirmed by the post-impact check. 15 s cancel countdown started on the device.", "warn");
+}
+
+function handleAlert(msg) {
+  seen();
+  if (!msg || !msg.type) return;
+  if (msg.type === "cancel") { hideBanner(); log("Wearer pressed the button: they're OK, alert cancelled.", "ok"); return; }
+  if (msg.type === "acked") { hideBanner(); log("Alert acknowledged.", "ok"); return; }
+  if (msg.id === lastAlertId) return;            // periodic re-send of the same alert
+  lastAlertId = msg.id;
+  clearInterval(preAlertTimer); preAlertTimer = null;
+  const what = msg.type === "sos" ? "SOS: manual help request" : "FALL DETECTED";
+  const bits = [];
+  if (msg.conf != null) bits.push(`CNN confidence ${(100 * msg.conf).toFixed(0)}%`);
+  if (msg.angle != null) bits.push(`body tilt ${Number(msg.angle).toFixed(0)}°`);
+  if (msg.still != null) bits.push(`still ${(100 * msg.still).toFixed(0)}% afterwards`);
+  bits.push("at " + clock());
+  showBanner("alert", what, bits.join(" · "), true);
+  log(`${what} (${bits.join(", ")})`, "alert");
+  $("vState").textContent = STATE_LABEL.alerted;
+  beep(); notify(what, bits.join(" · "));
+}
+
+function handleMotion(dv) {
+  if (dv.byteLength < 13) return;
+  const ax = dv.getInt16(0, true) / 1000, ay = dv.getInt16(2, true) / 1000, az = dv.getInt16(4, true) / 1000;
+  const gx = dv.getInt16(6, true) / 10, gy = dv.getInt16(8, true) / 10, gz = dv.getInt16(10, true) / 10;
+  const stage = dv.getUint8(12);
+  const a = Math.hypot(ax, ay, az), g = Math.hypot(gx, gy, gz);
+  // Tilt from upright, assuming the device's -Y axis points down when standing (as trained).
+  const tilt = a > 0.2 ? Math.acos(Math.max(-1, Math.min(1, -ay / a))) * 180 / Math.PI : NaN;
+  const now = performance.now();
+  motion.push({ t: now, a });
+  while (motion.length && now - motion[0].t > 10000) motion.shift();
+  $("rAx").textContent = ax.toFixed(2); $("rAy").textContent = ay.toFixed(2); $("rAz").textContent = az.toFixed(2);
+  $("rA").textContent = a.toFixed(2) + " g"; $("rG").textContent = g.toFixed(0) + " °/s";
+  $("rTilt").textContent = isNaN(tilt) ? "–" : tilt.toFixed(0) + "°";
+  document.querySelectorAll(".stage").forEach((el) => el.classList.toggle("on", Number(el.dataset.stage) === stage));
+}
+
+// ------------------------------------------------------------------ chart
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function draw() {
+  const cv = $("chart"), dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  const padL = 34, padB = 20, pw = w - padL - 6, ph = h - padB - 6;
+  const peak = motion.reduce((m, p) => Math.max(m, p.a), 0);
+  const ymax = Math.max(4, Math.ceil(peak));
+  const y = (v) => 6 + ph - (Math.min(v, ymax) / ymax) * ph;
+  const now = performance.now(), x = (t) => padL + pw - ((now - t) / 10000) * pw;
+
+  ctx.font = "11px system-ui, sans-serif"; ctx.fillStyle = css("--muted"); ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+  for (let v = 0; v <= ymax; v++) {
+    ctx.beginPath(); ctx.moveTo(padL, y(v)); ctx.lineTo(padL + pw, y(v)); ctx.stroke();
+    ctx.fillText(v + " g", 2, y(v) + 4);
+  }
+  for (let s = 0; s <= 10; s += 2) ctx.fillText(s ? "-" + s + "s" : "now", padL + pw - (s / 10) * pw - (s ? 10 : 22), h - 4);
+
+  const hline = (v, color) => {
+    ctx.save(); ctx.setLineDash([5, 4]); ctx.strokeStyle = color; ctx.beginPath();
+    ctx.moveTo(padL, y(v)); ctx.lineTo(padL + pw, y(v)); ctx.stroke(); ctx.restore();
+  };
+  hline(2.5, css("--danger")); hline(3.0, css("--danger")); hline(0.6, css("--warn"));
+
+  if (motion.length > 1) {
+    ctx.save(); ctx.beginPath(); ctx.rect(padL, 0, pw, h); ctx.clip();
+    ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.beginPath();
+    motion.forEach((p, i) => (i ? ctx.lineTo(x(p.t), y(p.a)) : ctx.moveTo(x(p.t), y(p.a))));
+    ctx.stroke(); ctx.restore();
+  } else {
+    ctx.fillStyle = css("--muted"); ctx.fillText("Waiting for motion data…", padL + 10, 6 + ph / 2);
+  }
+  requestAnimationFrame(draw);
+}
+
+// ------------------------------------------------------------------ alerts to the viewer
+let audioCtx = null;
+function beep() {
+  try {
+    audioCtx = audioCtx || new AudioContext();
+    for (let i = 0; i < 3; i++) {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime + i * 0.35;
+      o.frequency.value = 880; g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + 0.25);
+    }
+  } catch (_) {}
+}
+function notify(title, body) {
+  try { if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body }); } catch (_) {}
+}
+
+// ------------------------------------------------------------------ BLE
+const decoder = new TextDecoder();
+const parse = (dv) => { try { return JSON.parse(decoder.decode(dv)); } catch (_) { return null; } };
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    log("This browser has no Web Bluetooth. Use Chrome or Edge on localhost or HTTPS, or try demo mode.", "alert");
+    return;
+  }
+  stopDemo();
+  try {
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: "FallGuard" }, { services: [UUID.service] }], optionalServices: [UUID.service] });
+    device.addEventListener("gattserverdisconnected", onDisconnect);
+    wantConnected = true;
+    await attach();
+  } catch (e) {
+    if (e.name !== "NotFoundError") log("Connection failed: " + e.message, "alert");
+    if (!device || !device.gatt.connected) { wantConnected = false; setConn("Not connected"); }
+  }
+}
+
+async function attach() {
+  setConn("Connecting…", "warn");
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(UUID.service);
+  const alertC = await svc.getCharacteristic(UUID.alert);
+  const statusC = await svc.getCharacteristic(UUID.status);
+  ackChar = await svc.getCharacteristic(UUID.ack);
+  alertC.addEventListener("characteristicvaluechanged", (e) => handleAlert(parse(e.target.value)));
+  statusC.addEventListener("characteristicvaluechanged", (e) => { const m = parse(e.target.value); if (m) handleStatus(m); });
+  await alertC.startNotifications();
+  await statusC.startNotifications();
+  try {   // older firmware has no motion characteristic
+    const motionC = await svc.getCharacteristic(UUID.motion);
+    motionC.addEventListener("characteristicvaluechanged", (e) => handleMotion(e.target.value));
+    await motionC.startNotifications();
+  } catch (_) { log("This firmware has no live motion stream. Reflash the detector to see the chart.", "warn"); }
+  const st = parse(await statusC.readValue()); if (st && st.state) handleStatus(st);
+  const al = parse(await alertC.readValue()); if (al && (al.type === "fall" || al.type === "sos")) handleAlert(al);
+  setConn("Connected: " + (device.name || "FallGuard"), "ok");
+  $("btnConnect").textContent = "Disconnect";
+  log("Connected to " + (device.name || "FallGuard") + ".", "ok");
+}
+
+async function onDisconnect() {
+  ackChar = null; setConn("Disconnected", "danger");
+  if (!wantConnected) return;
+  log("Connection lost. Reconnecting…", "warn");
+  for (let i = 0; i < 10 && wantConnected; i++) {
+    await new Promise((r) => setTimeout(r, 1000 * Math.min(2 ** i, 15)));
+    if (!wantConnected) return;
+    try { await attach(); return; } catch (_) {}
+  }
+  wantConnected = false;
+  setConn("Disconnected", "danger"); $("btnConnect").textContent = "Connect device";
+}
+
+function disconnect() {
+  wantConnected = false;
+  if (device && device.gatt.connected) device.gatt.disconnect();
+  setConn("Not connected"); $("btnConnect").textContent = "Connect device";
+}
+
+async function acknowledge() {
+  if (demo) { demo.ack(); return; }
+  if (!ackChar) { log("Not connected, so the acknowledgement couldn't be sent.", "alert"); return; }
+  try { await ackChar.writeValueWithResponse(new TextEncoder().encode("ACK")); }
+  catch (e) { log("Acknowledge failed: " + e.message, "alert"); }
+}
+
+// ------------------------------------------------------------------ demo mode
+// Simulated stream that walks through: walking → hard sit (CNN: sit, ignored)
+// or fall (free-fall dip, impact, lying still) → 15 s countdown → alert.
+function startDemo() {
+  disconnect();
+  let t = 0, seq = 0, id = 100, phase = "walk", phaseT = 0, alerted = false, stage = 0, uptime = 3600;
+  const pkt = new DataView(new ArrayBuffer(14));
+  const send = (ax, ay, az, g) => {
+    const n = () => (Math.random() - 0.5) * 0.04;
+    [ax + n(), ay + n(), az + n()].forEach((v, i) => pkt.setInt16(2 * i, Math.round(v * 1000), true));
+    [g, g * 0.5, g * 0.3].forEach((v, i) => pkt.setInt16(6 + 2 * i, Math.round(v * 10), true));
+    pkt.setUint8(12, stage); pkt.setUint8(13, seq++ & 255); handleMotion(pkt);
+  };
+  const go = (p) => { phase = p; phaseT = 0; };
+  let next = "sit";
+  const iv = setInterval(() => {
+    t += 0.1; phaseT += 0.1;
+    if (Math.round(t * 10) % 50 === 0) {
+      uptime += 5;
+      handleStatus({ state: alerted ? "alerted" : (phase === "pre" ? "pre_alert" : "idle"), uptime_s: uptime, batt_mv: 3900 });
+    }
+    const step = Math.sin(phaseT * 2 * Math.PI * 1.8);
+    switch (phase) {
+      case "walk":
+        send(0.05 * step, -1 + 0.25 * step, 0.08 * step, 25 + 15 * step);
+        if (phaseT > 5) { go(next); next = next === "sit" ? "fall" : "sit"; }
+        break;
+      case "sit":   // hard sit: 2.7 g bump, stays upright
+        if (phaseT < 0.3) { stage = 0; send(0.1, -0.7, 0.2, 60); }
+        else if (phaseT < 0.5) { send(0.3, -2.7, 0.4, 90); if (stage === 0) stage = 1; }
+        else send(0.05, -0.98, 0.15, 3);
+        if (phaseT > 1.8 && stage === 1) { stage = 3; handleStatus({ event: "impact", probs: [0.03, 0.91, 0.01, 0.05], fall_like: false, model: true }); }
+        if (phaseT > 2.4 && stage === 3) stage = 0;
+        if (phaseT > 6) go("walk");
+        break;
+      case "fall":
+        if (phaseT < 0.4) send(0.1, -0.25, 0.1, 180);                       // free-fall
+        else if (phaseT < 0.6) { send(2.1, -3.6, 1.4, 320); stage = 1; }     // impact
+        else send(0.05, -0.05, -0.99, 2);                                    // lying still
+        if (phaseT > 1.9 && stage === 1) { stage = 2; handleStatus({ event: "impact", probs: [0.97, 0.01, 0.01, 0.01], fall_like: true, model: true }); }
+        if (phaseT > 3.9 && stage === 2) { stage = 3; go("pre"); handleStatus({ state: "pre_alert" }); }
+        break;
+      case "pre":
+        send(0.05, -0.05, -0.99, 2);
+        if (phaseT > 0.5) stage = 0;
+        if (phaseT >= PRE_ALERT_S && !alerted) {
+          alerted = true;
+          handleAlert({ id: ++id, type: "fall", conf: 0.97, angle: 86, still: 0.92, model: true });
+        }
+        break;
+      case "recover":
+        send(0.05, -1, 0.1, 10); if (phaseT > 3) go("walk");
+        break;
+    }
+  }, 100);
+  demo = {
+    stop: () => clearInterval(iv),
+    ack: () => {
+      if (!alerted) return;
+      alerted = false; handleAlert({ id, type: "acked" }); handleStatus({ state: "idle" }); go("recover");
+    },
+  };
+  setConn("Demo mode (simulated data)", "warn");
+  $("btnDemo").textContent = "Stop demo";
+  log("Demo started: simulated walking, then a hard sit and a fall, alternating.", null);
+}
+function stopDemo() {
+  if (!demo) return;
+  demo.stop(); demo = null; hideBanner(); setConn("Not connected");
+  $("btnDemo").textContent = "Demo mode"; log("Demo stopped.", null);
+}
+
+// ------------------------------------------------------------------ wire up
+buildBars();
+$("btnConnect").addEventListener("click", () => (wantConnected && device ? disconnect() : connect()));
+$("btnDemo").addEventListener("click", () => (demo ? stopDemo() : startDemo()));
+$("btnAck").addEventListener("click", acknowledge);
+requestAnimationFrame(draw);
+if (!navigator.bluetooth) $("btnConnect").title = "Web Bluetooth needs Chrome/Edge on localhost or HTTPS";
+if (location.hash === "#demo") startDemo();   // e.g. http://localhost:8000/#demo for presentations
+</script>
+</body>
+</html>
