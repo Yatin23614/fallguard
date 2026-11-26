@@ -136,6 +136,7 @@ The script compares against the Python int8 model. On the STM32, which runs in f
 ### 6. Receive alerts
 - **Laptop:** `python receiver/ble_receiver.py`. It prints alerts and status messages, auto-acks alerts (which stops the buzzer), and reconnects on its own.
 - **Phone:** use nRF Connect. Connect to `FallGuard`, enable notifications on the alert characteristic, and write any value to the ack characteristic.
+- **Wi-Fi:** the ESP32 joins the network set in `firmware/src/wifi_secrets.h`. That file is git-ignored; create it from [wifi_secrets.example.h](firmware/src/wifi_secrets.example.h), and use a 2.4 GHz network because the ESP32 has no 5 GHz radio. Once connected, `http://fallguard.local/status` (or `http://<device-ip>/status`, which is printed over serial) returns `{"status":{…},"alert":{…},"wifi":{"ip":…,"rssi":…}}`. Bluetooth alerting keeps working alongside it.
 - **Web dashboard:** [web/index.html](web/index.html) shows live motion, each impact's CNN decision, the 15 s countdown, alerts with an Acknowledge button, and an event log. It talks to the ESP32 directly over Web Bluetooth, so it needs Chrome or Edge on desktop or Android.
   ```bash
   cd web && python -m http.server 8000

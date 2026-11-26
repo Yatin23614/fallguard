@@ -17,6 +17,7 @@
 #include "imu.h"
 #include "model.h"
 #include "norm_params.h"
+#include "wifi_link.h"
 
 namespace {
 enum class Alert : uint8_t { Idle, PreAlert, Alerted };
@@ -68,6 +69,7 @@ void sendStatus() {
   snprintf(buf, sizeof buf, "{\"state\":\"%s\",\"uptime_s\":%lu,\"batt_mv\":%d}",
            names[(int)alertState], millis() / 1000, batteryMv());
   bleSendStatus(buf);
+  wifiSetStatus(buf);
 }
 
 // Every CNN run (fall-like or not) so the dashboard can show what it decided.
@@ -116,6 +118,7 @@ void raiseAlert(const char* type, const FallEvent* ev) {
   alertState = Alert::Alerted;
   lastResend = millis();
   bleSendAlert(alertJson);
+  wifiSetAlert(alertJson);
   sendStatus();
   Serial.printf("# ALERT %s (BLE %s)\n", alertJson,
                 bleConnected() ? "sent" : "queued, no client");
@@ -130,6 +133,7 @@ void clearAlert(const char* why) {
     snprintf(buf, sizeof buf, "{\"id\":%lu,\"type\":\"%s\"}",
              (unsigned long)alertId, strcmp(why, "ack") == 0 ? "acked" : "cancel");
     bleSendAlert(buf);
+    wifiSetAlert(buf);
   }
   alertState = Alert::Idle;
   sendStatus();
@@ -177,6 +181,8 @@ void appSetup() {
   }
   modelInit();
   bleBegin(BLE_DEVICE_NAME);
+  wifiBegin();
+  sendStatus();
   Serial.printf("# FallGuard ready (model: %s)\n", modelAvailable() ? "yes" : "NO");
   nextUs = micros();
   lastStatus = millis();
@@ -237,4 +243,5 @@ void appLoop() {
     sendStatus();
   }
   updateBuzzer(now);
+  wifiLoop();
 }

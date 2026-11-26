@@ -12,5 +12,8 @@ firmware_stm32/.pio/
 __pycache__/
 *.pyc
 
+# Local secrets (Wi-Fi credentials) -- template is wifi_secrets.example.h
+firmware/src/wifi_secrets.h
+
 # Local logs
 *.log
