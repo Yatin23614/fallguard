@@ -82,6 +82,7 @@ void sendImpact(const Classification& c) {
            c.fallLike ? "true" : "false", c.hasModel ? "true" : "false",
            millis() / 1000);
   bleSendStatus(buf);
+  wifiSetImpact(buf);
 }
 
 int16_t clamp16(float v) {
@@ -99,7 +100,8 @@ void sendMotion(const ImuSample& s) {
   }
   pkt[12] = (uint8_t)det.state();
   pkt[13] = seq++;
-  bleSendMotion(pkt, sizeof pkt);
+  if (bleConnected()) bleSendMotion(pkt, sizeof pkt);
+  wifiPushMotion(v, pkt[12]);
 }
 
 void raiseAlert(const char* type, const FallEvent* ev) {
@@ -218,7 +220,7 @@ void appLoop() {
     }
     if (++motionDiv >= SAMPLE_HZ / 10) {  // 10 Hz live stream for the dashboard
       motionDiv = 0;
-      if (ok && bleConnected()) sendMotion(s);
+      if (ok) sendMotion(s);  // BLE (if connected) + Wi-Fi ring buffer
     }
   }
 
@@ -229,7 +231,8 @@ void appLoop() {
   } else if (b == Btn::Short && alertState != Alert::Idle) {
     clearAlert("button");
   }
-  if (bleTakeAck() && alertState == Alert::Alerted) clearAlert("ack");
+  const bool acked = bleTakeAck() | wifiTakeAck();  // '|' so both flags are consumed
+  if (acked && alertState == Alert::Alerted) clearAlert("ack");
 
   if (alertState == Alert::PreAlert && now - preAlertStart >= PRE_ALERT_MS) {
     raiseAlert("fall", &pending);

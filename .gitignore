@@ -15,5 +15,8 @@ __pycache__/
 # Local secrets (Wi-Fi credentials) -- template is wifi_secrets.example.h
 firmware/src/wifi_secrets.h
 
+# Generated at build time from web/index.html by firmware/embed_web.py
+firmware/src/web_index.h
+
 # Local logs
 *.log

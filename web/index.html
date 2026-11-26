@@ -175,10 +175,11 @@
     </section>
   </div>
 
-  <p class="note">
-    Needs Chrome or Edge (Web Bluetooth) on desktop or Android, served from <code>localhost</code> or HTTPS:
-    run <code>python -m http.server 8000</code> in the <code>web</code> folder and open
-    <code>http://localhost:8000</code>. Demo mode works anywhere without a device.
+  <p class="note" id="note">
+    Easiest: open <code>http://fallguard.local/</code> (or the device's IP) on any phone or laptop on the same Wi-Fi.
+    Bluetooth instead: Chrome or Edge, served from <code>localhost</code> or HTTPS (run
+    <code>python -m http.server 8000</code> in the <code>web</code> folder and open
+    <code>http://localhost:8000</code>). Demo mode works anywhere without a device.
   </p>
 </div>
 
@@ -300,9 +301,11 @@ function handleAlert(msg) {
 
 function handleMotion(dv) {
   if (dv.byteLength < 13) return;
-  const ax = dv.getInt16(0, true) / 1000, ay = dv.getInt16(2, true) / 1000, az = dv.getInt16(4, true) / 1000;
-  const gx = dv.getInt16(6, true) / 10, gy = dv.getInt16(8, true) / 10, gz = dv.getInt16(10, true) / 10;
-  const stage = dv.getUint8(12);
+  handleMotionValues(dv.getInt16(0, true) / 1000, dv.getInt16(2, true) / 1000, dv.getInt16(4, true) / 1000,
+    dv.getInt16(6, true) / 10, dv.getInt16(8, true) / 10, dv.getInt16(10, true) / 10, dv.getUint8(12));
+}
+
+function handleMotionValues(ax, ay, az, gx, gy, gz, stage) {
   const a = Math.hypot(ax, ay, az), g = Math.hypot(gx, gy, gz);
   // Tilt from upright, assuming the device's -Y axis points down when standing (as trained).
   const tilt = a > 0.2 ? Math.acos(Math.max(-1, Math.min(1, -ay / a))) * 180 / Math.PI : NaN;
@@ -437,16 +440,81 @@ function disconnect() {
 
 async function acknowledge() {
   if (demo) { demo.ack(); return; }
+  if (wifi) {
+    try { await fetch("/ack", { method: "POST" }); }
+    catch (e) { log("Acknowledge failed: " + e.message, "alert"); }
+    return;
+  }
   if (!ackChar) { log("Not connected, so the acknowledgement couldn't be sent.", "alert"); return; }
   try { await ackChar.writeValueWithResponse(new TextEncoder().encode("ACK")); }
   catch (e) { log("Acknowledge failed: " + e.message, "alert"); }
+}
+
+// ------------------------------------------------------------------ Wi-Fi mode
+// When this page is served by the ESP32 itself (http://fallguard.local/), Web
+// Bluetooth is unavailable (it needs HTTPS or localhost), so poll /live instead.
+let wifi = null;
+async function startWifi() {
+  const st = { seq: 0, status: "", alert: "", impactN: -1, first: true, fails: 0, stop: false };
+  wifi = st;
+  const poll = async () => {
+    while (!st.stop) {
+      try {
+        const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 3000);
+        const r = await fetch(`/live?since=${st.seq}`, { cache: "no-store", signal: ctl.signal });
+        clearTimeout(to);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const d = await r.json();
+        if (st.fails || st.first) setConn(`Connected over Wi-Fi (${d.wifi ? d.wifi.ip : location.host})`, "ok");
+        if (st.fails) log("Wi-Fi connection restored.", "ok");
+        st.fails = 0;
+        for (const m of d.m || []) handleMotionValues(m[0] / 1000, m[1] / 1000, m[2] / 1000, m[3] / 10, m[4] / 10, m[5] / 10, m[6]);
+        st.seq = d.seq;
+        const s = JSON.stringify(d.status || {});
+        if (s !== st.status) { st.status = s; if (d.status && d.status.state) handleStatus(d.status); }
+        if (d.uptime_s != null) { $("vUptime").textContent = fmtUptime(d.uptime_s); seen(); }
+        if (d.impact_n !== st.impactN) {
+          if (!st.first && d.impact && d.impact.event) handleStatus(d.impact);
+          st.impactN = d.impact_n;
+        }
+        const a = JSON.stringify(d.alert || {});
+        if (a !== st.alert) {
+          st.alert = a;
+          const al = d.alert || {};
+          // On first load only surface an alert that is still active.
+          if (!st.first || al.type === "fall" || al.type === "sos") handleAlert(al);
+        }
+        if (st.first) { st.first = false; log("Connected to the device over Wi-Fi.", "ok"); }
+      } catch (e) {
+        if (st.stop) return;
+        if (st.fails++ === 0) log("Lost contact with the device over Wi-Fi. Retrying…", "warn");
+        setConn("Wi-Fi: device not responding", "danger");
+        await new Promise((r) => setTimeout(r, Math.min(500 * st.fails, 5000)));
+        continue;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+  poll();
+}
+function stopWifi() { if (wifi) { wifi.stop = true; wifi = null; } }
+
+// Served from the device? Its /live endpoint answers with JSON.
+async function detectDevice() {
+  if (location.protocol === "file:") return false;
+  try {
+    const r = await fetch("/live?since=0", { cache: "no-store" });
+    if (!r.ok) return false;
+    const d = await r.json();
+    return d && "seq" in d;
+  } catch (_) { return false; }
 }
 
 // ------------------------------------------------------------------ demo mode
 // Simulated stream that walks through: walking → hard sit (CNN: sit, ignored)
 // or fall (free-fall dip, impact, lying still) → 15 s countdown → alert.
 function startDemo() {
-  disconnect();
+  disconnect(); stopWifi();
   let t = 0, seq = 0, id = 100, phase = "walk", phaseT = 0, alerted = false, stage = 0, uptime = 3600;
   const pkt = new DataView(new ArrayBuffer(14));
   const send = (ax, ay, az, g) => {
@@ -512,6 +580,7 @@ function stopDemo() {
   if (!demo) return;
   demo.stop(); demo = null; hideBanner(); setConn("Not connected");
   $("btnDemo").textContent = "Demo mode"; log("Demo stopped.", null);
+  if (onDevice) startWifi();
 }
 
 // ------------------------------------------------------------------ wire up
@@ -521,7 +590,17 @@ $("btnDemo").addEventListener("click", () => (demo ? stopDemo() : startDemo()));
 $("btnAck").addEventListener("click", acknowledge);
 requestAnimationFrame(draw);
 if (!navigator.bluetooth) $("btnConnect").title = "Web Bluetooth needs Chrome/Edge on localhost or HTTPS";
-if (location.hash === "#demo") startDemo();   // e.g. http://localhost:8000/#demo for presentations
+let onDevice = false;
+(async () => {
+  if (location.hash === "#demo") { startDemo(); return; }   // e.g. http://localhost:8000/#demo
+  onDevice = await detectDevice();
+  if (onDevice) {
+    // Served by the ESP32 over Wi-Fi: Web Bluetooth isn't available here.
+    if (!navigator.bluetooth) $("btnConnect").style.display = "none";
+    $("note").textContent = "Served by the FallGuard device over Wi-Fi. Live data updates several times a second.";
+    startWifi();
+  }
+})();
 </script>
 </body>
 </html>
