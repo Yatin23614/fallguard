@@ -2,13 +2,15 @@
 
 A waist-worn device that detects falls and sends a BLE alert to a phone or laptop. A small 1D-CNN running on the microcontroller separates real falls from deliberately **sitting** or **lying down**.
 
+For a complete reference covering hardware, algorithm, model, pipeline, firmware, protocols and troubleshooting, see [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md).
+
 There are two firmware builds. Both share the same Python training pipeline and the same detection logic.
 
 | | ESP32 | STM32 Nucleo-F401RE |
 |---|---|---|
 | Folder | [firmware/](firmware/) | [firmware_stm32/](firmware_stm32/) (all files prefixed `stm32_`) |
 | BLE | Built-in radio, custom GATT service | External **HM-10** BLE-UART module |
-| CNN runtime | TFLite-Micro, int8 (`model_data.h`) | Library-free float32 engine (`stm32_model_weights_f32.h`) |
+| CNN runtime | Library-free float32 engine (`model_weights_f32.h`) | Same float32 engine (`stm32_model_weights_f32.h`) |
 | Upload / serial | USB (CP2102/CH340) | On-board ST-LINK (USB virtual COM port) |
 | Receiver | `python receiver/ble_receiver.py` | `python receiver/ble_receiver.py --hm10` |
 
@@ -112,11 +114,13 @@ Files go to `data/own/<subject>/<label>_<timestamp>.csv`.
 ```bash
 python ml/preprocess.py     # → data/processed/windows.npz
 python ml/train.py          # SisFall pre-train → own-data fine-tune (subject-wise split)
-python ml/export.py         # ESP32: int8 TFLite → firmware/src/model_data.h + norm_params.h
-                            # STM32: float32 weights → firmware_stm32/src/stm32_model_weights_f32.h
-                            #        + stm32_norm_params.h (checked against Keras first)
+python ml/export.py         # float32 weights, checked against Keras first:
+                            #   ESP32: firmware/src/model_weights_f32.h + norm_params.h
+                            #   STM32: firmware_stm32/src/stm32_model_weights_f32.h + stm32_norm_params.h
+                            # also models/model_int8.tflite (reference only, not used by the firmware)
 python ml/evaluate.py       # confusion matrix, fall sensitivity/specificity, float vs int8,
                             # simulated false alarms/hour on own non-fall recordings
+                            # (the float32 report is the one that matches the device)
 ```
 Targets: fall sensitivity ≥ 95%, and specificity against sit/lie ≥ 95%.
 
@@ -131,7 +135,7 @@ On-device parity check (board vs Python, plus inference time). Close the serial 
 ```bash
 python ml/parity_check.py --port COM5
 ```
-The script compares against the Python int8 model. On the STM32, which runs in float32, expect small differences of around 0.01–0.02, but the predicted class should match.
+The script compares against the Keras model. Both boards run float32, so the differences should be tiny and the predicted class should match. Inference takes a few milliseconds per window.
 
 ### 6. Receive alerts
 - **Laptop:** `python receiver/ble_receiver.py`. It prints alerts and status messages, auto-acks alerts (which stops the buzzer), and reconnects on its own.
@@ -172,8 +176,8 @@ Run 10 mattress falls, 10 hard sits, 10 lie-downs and 30 minutes of normal activ
 - whether a short button press during the 15 s pre-alert cancels it.
 
 ## Notes
-- The model is a 1D CNN over time. It is written with `(k,1)` Conv2D kernels, so it converts to plain CONV_2D, MAX_POOL_2D, AVERAGE_POOL_2D, FULLY_CONNECTED and SOFTMAX ops that every TFLite-Micro build supports. It is about 20 KB as int8.
+- The model is a 1D CNN over time with 11,844 parameters (about 46 KB of float32 weights after BatchNorm folding). It is written with `(k,1)` Conv2D kernels, so it also converts cleanly to TFLite for the int8 reference model.
 - Thresholds in `firmware/src/config.h`, `firmware_stm32/src/stm32_config.h` and `ml/config.py` mirror each other. Keep all three in sync.
-- The STM32 runs the same CNN with a small library-free float32 engine, [stm32_model_cnn_f32.cpp](firmware_stm32/src/stm32_model_cnn_f32.cpp). `export.py` runs a NumPy copy of its exact loops and refuses to write the STM32 headers unless it matches Keras. If you change the model architecture, update both.
+- Both boards run the CNN on a small library-free float32 engine: [model.cpp](firmware/src/model.cpp) on the ESP32 and [stm32_model_cnn_f32.cpp](firmware_stm32/src/stm32_model_cnn_f32.cpp) on the STM32. It replaced TFLite-Micro on the ESP32, which took about 1 s per window there because it has no optimised kernels for the classic ESP32. `export.py` runs a NumPy copy of the engine's exact loops and refuses to write the headers unless it matches Keras. If you change the model architecture, update `export.py` and both C files.
 - Not yet included: a SIM800L GSM/SMS fallback, battery power with deep sleep (MPU-6050 motion-interrupt wake on GPIO19), and a phone app.
 - This is a prototype, not a certified medical device.
